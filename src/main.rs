@@ -4,11 +4,12 @@ use pixels::{Pixels, SurfaceTexture};
 use rayon::prelude::*;
 use screenshots::Screen;
 use std::collections::HashSet;
+use std::thread;
 use winit::dpi::PhysicalSize;
 use winit::event::{
     ElementState, Event, KeyboardInput, MouseButton, MouseScrollDelta, VirtualKeyCode, WindowEvent,
 };
-use winit::event_loop::{ControlFlow, EventLoop};
+use winit::event_loop::{ControlFlow, EventLoop, EventLoopBuilder};
 use winit::window::{Fullscreen, WindowBuilder};
 
 // Plattformspezifische Erweiterung für X11, um den Fenstertyp zu setzen
@@ -23,6 +24,10 @@ use winit::platform::x11::{WindowBuilderExtX11, XWindowType};
 
 const BRUSH_SIZE: i32 = 5;
 const FOCUS_RADIUS: f64 = 125.0;
+
+enum UserEvent {
+    ScreenshotReady(Result<RgbaImage>),
+}
 
 /// Repräsentiert den Anwendungszustand.
 struct App {
@@ -318,13 +323,24 @@ impl App {
 
 fn main() -> Result<()> {
     let screens = Screen::all()?;
-    let primary_screen = screens.get(0).ok_or_else(|| anyhow::anyhow!("Konnte keinen Bildschirm finden"))?;
-    let image_buffer = primary_screen.capture()?;
-    let (width, height) = image_buffer.dimensions();
+    let primary_screen = screens
+        .get(0)
+        .ok_or_else(|| anyhow::anyhow!("Konnte keinen Bildschirm finden"))?;
+    let (width, height) = (
+        primary_screen.display_info.width,
+        primary_screen.display_info.height,
+    );
+    let screen_info = primary_screen.display_info;
 
-    let event_loop = EventLoop::new();
-    
-    // Erstelle den WindowBuilder veränderbar, um plattformspezifische Optionen hinzuzufügen
+    let event_loop: EventLoop<UserEvent> = EventLoopBuilder::with_user_event().build();
+    let proxy = event_loop.create_proxy();
+
+    thread::spawn(move || {
+        let screen = Screen::new(&screen_info);
+        let capture_result = screen.capture().map_err(anyhow::Error::from);
+        proxy.send_event(UserEvent::ScreenshotReady(capture_result)).ok();
+    });
+
     let mut builder = WindowBuilder::new()
         .with_decorations(false)
         .with_fullscreen(Some(Fullscreen::Borderless(None)))
@@ -347,29 +363,41 @@ fn main() -> Result<()> {
     window.set_window_level(winit::window::WindowLevel::AlwaysOnTop);
     window.set_cursor_visible(true);
 
-    let mut app = App::new(image_buffer);
+    let mut app: Option<App> = None;
 
     let window_size = window.inner_size();
     let surface_texture = SurfaceTexture::new(window_size.width, window_size.height, &window);
     let mut pixels = Pixels::new(width, height, surface_texture)?;
 
     event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Poll; // Auf Poll umstellen für kontinuierliches Rendern
+        *control_flow = ControlFlow::Poll;
 
         match event {
+            Event::UserEvent(UserEvent::ScreenshotReady(result)) => match result {
+                Ok(image) => {
+                    app = Some(App::new(image));
+                    window.request_redraw();
+                }
+                Err(e) => {
+                    eprintln!("Fehler beim Erstellen des Screenshots: {}", e);
+                    *control_flow = ControlFlow::Exit;
+                }
+            },
+
             Event::WindowEvent {
                 event: win_event, ..
             } => {
-                app.input(&win_event);
+                if let Some(app) = &mut app {
+                    app.input(&win_event);
+                }
 
                 match win_event {
                     WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
                     WindowEvent::KeyboardInput {
-                        input:
-                            KeyboardInput {
-                                virtual_keycode: Some(VirtualKeyCode::Escape),
-                                ..
-                            },
+                        input: KeyboardInput {
+                            virtual_keycode: Some(VirtualKeyCode::Escape),
+                            ..
+                        },
                         ..
                     } => *control_flow = ControlFlow::Exit,
                     WindowEvent::Resized(size) => {
@@ -383,12 +411,21 @@ fn main() -> Result<()> {
             }
 
             Event::MainEventsCleared => {
-                app.update(); // Update-Logik für Animationen aufrufen
+                if let Some(app) = &mut app {
+                    app.update();
+                }
                 window.request_redraw();
             }
             Event::RedrawRequested(_) => {
                 let size = window.inner_size();
-                app.draw(&mut pixels, size.width, size.height);
+                if let Some(app) = &app {
+                    app.draw(&mut pixels, size.width, size.height);
+                } else {
+                    let frame = pixels.frame_mut();
+                    for pixel in frame.chunks_exact_mut(4) {
+                        pixel.copy_from_slice(&[0x40, 0x40, 0x40, 0xff]);
+                    }
+                }
                 if let Err(e) = pixels.render() {
                     eprintln!("Fehler beim Rendern: {}", e);
                     *control_flow = ControlFlow::Exit;

@@ -1,9 +1,8 @@
-# Rugnify: Screenshot Annotation Tool
+# Rugnify: Screening Helper/Annotation Tool
 
 Rugnify is a fast and straightforward tool to take screenshots and draw on them directly. Perfect for quickly marking, highlighting, or explaining something on an image without opening a cumbersome image editing program.
 
-![Rugnify Demo](https://place-holder.com/rugnify-demo.gif)
-*(Placeholder: You could insert a GIF here showing the usage)*
+![Rugnify Demo](rugnify_demo.gif)
 
 ## Features
 
@@ -34,7 +33,7 @@ sudo dnf install libX11-devel libXrandr-devel libXi-devel libXcursor-devel libXi
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/YOUR_USERNAME/rugnify.git
+    git clone https://github.com/drvcvt/rugnify.git
     cd rugnify
     ```
 
